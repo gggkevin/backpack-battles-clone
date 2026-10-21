@@ -42,7 +42,7 @@ export function buildUnit(board, { name, hp, classDef = null, branch = null, see
     armor: 0,
     armorFlatBonus: 0,
     damage: 0,
-    crit: 0,
+    crit: bonus.crit || 0,
     critMult: 1.6,
     speed: passive.speed || 0,
     globalSpeed: 0,
