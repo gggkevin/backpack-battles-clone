@@ -16,6 +16,8 @@
     <h1>背包乱斗 <span class="ver">复刻版</span></h1>
     <div id="stats" class="stats"></div>
     <div class="topbar-actions">
+      <span id="online-pill" class="online-pill" title="在线对战状态">联网中…</span>
+      <button id="btn-rank" class="ghost icon" title="排行榜">榜</button>
       <button id="btn-help" class="ghost icon" title="玩法">?</button>
       <button id="btn-reset" class="ghost icon" title="换职业">↺</button>
     </div>
@@ -62,8 +64,14 @@
 
     <!-- 正中间的开始按钮：横跨整页，水平居中 -->
     <div class="pick-start-row">
+      <label class="nick-field">
+        <span>昵称</span>
+        <input id="nick-input" maxlength="16" placeholder="别的玩家会看到这个名字" autocomplete="nickname">
+      </label>
       <button class="primary start-big" id="btn-pick-start">开 始 游 戏</button>
+      <button class="ghost" id="btn-pick-rank">排行榜</button>
     </div>
+    <p class="online-hint">在线对战：每回合会匹配到其他玩家<b>同一回合</b>的真实背包（异步 PvP，对方不用同时在线）。暂时没人时由 AI 对手顶上。</p>
   </div>
 
   <!-- ==================== 二级页面：一屏完成买 + 整理 ==================== -->

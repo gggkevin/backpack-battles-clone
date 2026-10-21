@@ -371,9 +371,13 @@ export class Run {
     return { ok: true };
   }
 
-  runBattle() {
+  /**
+   * 打这一回合。传入 opponent（在线玩家的背包快照）就和真人构筑打，
+   * 不传或快照不可用时退回本地 AI 对手。
+   */
+  runBattle(opponent = null) {
     const round = this.header.round;
-    const opp = makeOpponent(round, this.seed + round * 37);
+    const opp = opponent || makeOpponent(round, this.seed + round * 37);
     const mine = buildUnit(this.board, {
       name: '你',
       hp: this.header.hp,
@@ -381,7 +385,11 @@ export class Run {
       branch: this.branch,
       seed: this.seed + round,
     });
-    const foe = buildUnit(opp.board, { name: opp.name, hp: opp.hp, seed: this.seed + round + 1 });
+    const foe = buildUnit(opp.board, {
+      name: opp.name, hp: opp.hp,
+      classDef: opp.classDef || null, branch: opp.branch || null,
+      seed: this.seed + round + 1,
+    });
     const result = simulate(mine, foe, { seed: this.seed + round * 101 });
 
     const win = result.winner === 'A';
@@ -409,6 +417,9 @@ export class Run {
     this.lastResult = {
       round,
       oppName: opp.name,
+      oppOnline: !!opp.online,
+      oppRecord: opp.record || null,
+      oppClassId: opp.classDef?.id || null,
       winner: result.winner,
       duration: result.duration,
       hpA: result.hpA, hpB: result.hpB,
@@ -428,6 +439,7 @@ export class Run {
       myCols: this.board.cols, myRows: this.board.rows,
       foeCols: opp.board.cols, foeRows: opp.board.rows,
       myCloth: this.board.cloth ? { ...this.board.cloth } : null,
+      foeCloth: opp.board.cloth ? { ...opp.board.cloth } : null,
       orderMine: mine.order,
       orderFoe: foe.order,
       stats: result.stats,
