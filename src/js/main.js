@@ -145,8 +145,8 @@ function showPage(which) {
 
 // ============ 选角色页面（最上一级） ============
 
-/** 角色立绘索引：六个职业各一张 */
-const HERO_ART = { ranger: 1, warrior: 0, mage: 2, rogue: 5, merchant: 6, druid: 7 };
+/** 角色立绘索引：八个职业各一张 */
+const HERO_ART = { ranger: 1, warrior: 0, mage: 2, rogue: 5, merchant: 6, druid: 7, designer: 3, writer: 4 };
 function heroArtIndex(classId) { return HERO_ART[classId] ?? 0; }
 
 let pickedClassId = 'ranger';
