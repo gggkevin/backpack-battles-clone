@@ -1,0 +1,11 @@
+# 静态页面原样发布到 dist（不打包，只拷贝），在线对战接口走 Netlify Functions
+[build]
+  command = "rm -rf dist && mkdir -p dist && cp -r index.html src assets dist/"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+
+# 本地 netlify dev 直接用仓库根目录，不用先拷贝
+[dev]
+  publish = "."

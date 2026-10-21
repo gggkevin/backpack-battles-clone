@@ -20,6 +20,10 @@ import { buildOverview, nextStep } from './core/analyze.js';
 import { shopHints, progressFor } from './data/recipes.js';
 import { BattleStage } from './ui/stage.js';
 import { STAGE, STARTER_CLOTH, clothArea } from './data/cloths.js';
+import { encodeGhost, ghostOpponent, cleanName } from './core/ghost.js';
+import {
+  getPlayerName, setPlayerName, newRunId, uploadGhost, fetchGhost, submitRun, fetchLeaderboard,
+} from './net/online.js';
 import {
   renderBoard, renderShop, renderDetail, renderStats, renderCapacity, renderGuide,
   renderOverview, renderShopQuality, renderShopHints, upgradePopupHtml,
@@ -35,6 +39,8 @@ let stage = null;
 let speed = 1.4;
 let guidesDone = { bought: false, moved: false };
 let drag = null;
+let runId = null;
+let matching = false;     // 正在匹配在线对手，防止重复点开战
 
 const el = {};
 
@@ -45,7 +51,25 @@ const el = {};
 function boot() {
   cacheEls();
   bindStaticEvents();
+  el.nickInput.value = getPlayerName();
   showClassPage();
+  checkOnline();
+}
+
+/** 顶栏的联网状态：顺手拿一下全服最近 24 小时的对局量 */
+async function checkOnline() {
+  const r = await fetchLeaderboard();
+  if (r) {
+    el.onlinePill.className = 'online-pill on';
+    el.onlinePill.textContent = `在线 · 24h ${r.runs24h} 局`;
+  } else {
+    el.onlinePill.className = 'online-pill off';
+    el.onlinePill.textContent = '离线 · AI 对手';
+  }
+}
+
+function playerName() {
+  return cleanName(el.nickInput.value || getPlayerName());
 }
 
 function cacheEls() {
@@ -62,6 +86,10 @@ function cacheEls() {
   el.pickItems = document.getElementById('pick-items');
   el.pickBranches = document.getElementById('pick-branches');
   el.btnPickStart = document.getElementById('btn-pick-start');
+  el.btnPickRank = document.getElementById('btn-pick-rank');
+  el.btnRank = document.getElementById('btn-rank');
+  el.nickInput = document.getElementById('nick-input');
+  el.onlinePill = document.getElementById('online-pill');
   el.stats = document.getElementById('stats');
   el.guide = document.getElementById('guide');
   el.board = document.getElementById('board');
@@ -194,7 +222,11 @@ function renderClassPage() {
 
 function startRun(classId, seed = Math.floor(Math.random() * 1e9)) {
   run = new Run({ seed, classId });
+  runId = newRunId();
+  const nick = el.nickInput.value.trim();
+  if (nick) setPlayerName(cleanName(nick));
   selectedUid = null;
+  matching = false;
   drag = null;
   playing = false;
   guidesDone = { bought: false, moved: false };
@@ -641,11 +673,28 @@ function bindStaticEvents() {
     renderAll();
   });
 
-  el.btnBattle.addEventListener('click', () => {
-    if (!run || playing || run.phase !== PHASE.PREPARE) return;
+  el.btnBattle.addEventListener('click', async () => {
+    if (!run || playing || matching || run.phase !== PHASE.PREPARE) return;
     const start = run.startBattle();
     if (!start.ok) { toast(start.reason); return; }
-    runBattle();
+    matching = true;
+    const label = el.btnBattle.textContent;
+    el.btnBattle.textContent = '匹配对手中…';
+    el.btnBattle.disabled = true;
+    const myRun = run;
+    try {
+      // 先把自己的背包存上去，再抽一个别人同回合的背包；两件事并行
+      const [, row] = await Promise.all([
+        uploadGhost(runId, encodeGhost(myRun, playerName())),
+        fetchGhost(runId, myRun.header.round),
+      ]);
+      if (run !== myRun) return;   // 等待期间换了职业重开
+      runBattle(row ? ghostOpponent(row) : null);
+    } finally {
+      matching = false;
+      el.btnBattle.textContent = label;
+      el.btnBattle.disabled = false;
+    }
   });
 
   el.btnBack.addEventListener('click', () => {
@@ -684,6 +733,9 @@ function bindStaticEvents() {
   el.btnReset.addEventListener('click', showClassPage);
   el.btnHelp.addEventListener('click', showHelp);
   el.btnPickStart.addEventListener('click', () => startRun(pickedClassId));
+  el.btnPickRank.addEventListener('click', () => showLeaderboard());
+  el.btnRank.addEventListener('click', () => showLeaderboard());
+  el.nickInput.addEventListener('change', () => setPlayerName(cleanName(el.nickInput.value)));
 
   // 视口变化时重新给背包定尺寸（含手机横竖屏切换）
   let resizeTimer = 0;
@@ -702,14 +754,17 @@ function bindStaticEvents() {
 
 // ============ 战斗（二级页面） ============
 
-function runBattle() {
-  const result = run.runBattle();
+function runBattle(opponent = null) {
+  const result = run.runBattle(opponent);
   run.lastSynergies = result.synergies || [];
   playing = true;
 
   showPage('battle');
   el.battleRound.textContent = `第 ${result.round} 回合`;
   el.foeName.textContent = result.oppName;
+  el.foeName.insertAdjacentHTML('beforeend', result.oppOnline
+    ? ` <span class="foe-tag" title="另一位玩家这一回合的真实背包">在线玩家 · ${result.oppRecord}</span>`
+    : ' <span class="foe-tag ai" title="暂时没有匹配到同回合的玩家">AI</span>');
   el.battleLog.innerHTML = '';
   el.stageRoot.innerHTML = '';
 
@@ -739,10 +794,12 @@ function runBattle() {
       title: result.oppName,
       cls: '',
       hp: result.hpB,
-      art: `assets/chars/char-${result.round % 6}.png`,
+      art: result.oppClassId
+        ? `assets/chars/char-${heroArtIndex(result.oppClassId)}.png`
+        : `assets/chars/char-${result.round % 6}.png`,
       boardHtml: renderMiniBoard({
         cols: result.foeCols, rows: result.foeRows,
-        cloth: null,
+        cloth: result.foeCloth,
         items: result.foeBuild,
       }),
       stats: result.foeStats,
@@ -858,11 +915,58 @@ function showGameOver(reason) {
     <div class="kv"><span>战绩</span><b>${h.wins} 胜 ${h.losses} 负</b></div>
     <div class="kv"><span>合成</span><b>${h.fuses} 次</b></div>
     <div class="kv"><span>评分</span><b class="big">${run.finalScore()}</b></div>
-    <div class="row mt"><button class="primary" id="ov-again">再来一局</button></div>`;
+    <div class="kv"><span>全服排名</span><b id="ov-rank">上传中…</b></div>
+    <div class="row mt">
+      <button class="primary" id="ov-again">再来一局</button>
+      <button class="ghost" id="ov-board">排行榜</button>
+    </div>`;
   el.overlay.classList.remove('hidden');
+  const myRunId = runId;
+  submitRun(myRunId, {
+    playerName: playerName(),
+    classId: run.classDef.id,
+    branchName: h.branchName,
+    round: h.round, wins: h.wins, losses: h.losses, fuses: h.fuses,
+    alive: h.hp > 0,
+  }).then((r) => {
+    const rankEl = document.getElementById('ov-rank');
+    if (rankEl) rankEl.textContent = r ? `第 ${r.rank} 名` : '离线，未上传';
+  });
+  document.getElementById('ov-board').addEventListener('click', () => showLeaderboard());
   document.getElementById('ov-again').addEventListener('click', () => {
     el.overlay.classList.add('hidden');
     showClassPage();
+  });
+}
+
+/** 全服排行榜 */
+async function showLeaderboard() {
+  el.overlayBody.innerHTML = '<h2>排行榜</h2><p class="lead">加载中…</p>';
+  el.overlay.classList.remove('hidden');
+  const r = await fetchLeaderboard();
+  const me = playerName();
+  const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const rows = (r?.top || []).map((x, i) => `
+    <tr class="${x.playerName === me ? 'me' : ''}">
+      <td class="num">${i + 1}</td>
+      <td>${esc(x.playerName)}</td>
+      <td>${esc(CLASS_BY_ID[x.classId]?.name || x.classId)}${x.branchName ? ' · ' + esc(x.branchName) : ''}</td>
+      <td class="num">${x.wins} 胜 ${x.losses} 负</td>
+      <td class="num"><b>${x.score}</b></td>
+    </tr>`).join('');
+  el.overlayBody.innerHTML = `
+    <h2>排行榜</h2>
+    <p class="lead">${r
+      ? `全服共 ${r.games} 局完赛，最近 24 小时有 ${r.runs24h} 局在打、上传了 ${r.boards24h} 个背包。`
+      : '连不上服务器，稍后再试。'}</p>
+    ${rows ? `<table class="rank-table">
+      <thead><tr><th>#</th><th>玩家</th><th>职业</th><th>战绩</th><th>评分</th></tr></thead>
+      <tbody>${rows}</tbody></table>` : (r ? '<p class="hint">还没有人完赛，来当第一个吧。</p>' : '')}
+    <div class="row mt"><button class="primary" id="ov-close">关闭</button></div>`;
+  document.getElementById('ov-close').addEventListener('click', () => {
+    el.overlay.classList.add('hidden');
+    // 从结算页打开的排行榜，关掉后回到选角色
+    if (run?.phase === PHASE.OVER) showClassPage();
   });
 }
 
